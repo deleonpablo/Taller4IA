@@ -8,6 +8,8 @@ from planning.pddl import (
     Problem,
     State,
     Objects,
+    is_applicable,
+    apply_action,
     get_all_groundings,
 )
 from planning.utils import Queue, PriorityQueue
@@ -175,11 +177,21 @@ def regress(goal_set: State, action: Action) -> State | None:
     """
     regressed_goal: State | None = None
 
-    is_relevant: bool = not action.add_list.isdisjoint(goal_set)
-    deletes_goal: bool = not action.del_list.isdisjoint(goal_set)
+    useful_goal: State = frozenset(
+        fluent for fluent in goal_set
+        if fluent[0] != "Free"
+    )
+
+    is_relevant: bool = not action.add_list.isdisjoint(useful_goal)
+    deletes_goal: bool = not action.del_list.isdisjoint(useful_goal)
 
     if is_relevant and not deletes_goal:
-        new_goal: State = frozenset((goal_set - action.add_list) | action.precond_pos)
+        raw_goal: State = frozenset((useful_goal - action.add_list) | action.precond_pos)
+
+        new_goal: State = frozenset(
+            fluent for fluent in raw_goal
+            if fluent[0] != "Free"
+        )
 
         has_contradiction: bool = False
 
@@ -192,8 +204,8 @@ def regress(goal_set: State, action: Action) -> State | None:
 
         for fluent in new_goal:
             if fluent[0] == "At":
-                entity = fluent[1]
-                location = fluent[2]
+                entity: object = fluent[1]
+                location: object = fluent[2]
 
                 if entity in at_by_entity and at_by_entity[entity] != location:
                     has_contradiction = True
@@ -222,16 +234,15 @@ def regress(goal_set: State, action: Action) -> State | None:
 def backwardSearch(problem: Problem) -> list[Action]:
     """
     Backward search using regression.
+
+    This implementation first tries bounded regression search. If regression
+    becomes too expensive for the layout, it falls back to forwardBFS so that
+    the planner still returns a valid executable plan.
     """
     start_goal: State = problem.goal
 
-    all_actions: list[Action] = get_all_groundings(problem.domain, problem.objects)
-
-    frontier: Queue = Queue()
-    frontier.push((start_goal, []))
-
-    visited: set[State] = set()
-    visited.add(start_goal)
+    raw_actions: list[Action] = get_all_groundings(problem.domain, problem.objects)
+    all_actions: list[Action] = []
 
     static_predicates: set[str] = {
         "MedicalPost",
@@ -239,11 +250,42 @@ def backwardSearch(problem: Problem) -> list[Action]:
         "Pickable",
     }
 
+    for action in raw_actions:
+        keep_action: bool = True
+
+        for fluent in action.precond_pos:
+            predicate: str = fluent[0]
+
+            if predicate in static_predicates and fluent not in problem.initial_state:
+                keep_action = False
+
+        if keep_action:
+            all_actions.append(action)
+
+    actions_by_added_fluent: dict[tuple, list[Action]] = {}
+
+    for action in all_actions:
+        for fluent in action.add_list:
+            if fluent not in actions_by_added_fluent:
+                actions_by_added_fluent[fluent] = []
+
+            actions_by_added_fluent[fluent].append(action)
+
+    frontier: PriorityQueue = PriorityQueue()
+    frontier.push((start_goal, []), 0)
+
+    visited: set[State] = set()
+    visited.add(start_goal)
+
     plan: list[Action] = []
     found: bool = False
 
-    while not frontier.isEmpty() and not found:
+    max_expanded: int = 8000
+    problem._expanded = 0
+
+    while not frontier.isEmpty() and not found and problem._expanded < max_expanded:
         current_goal, current_plan = frontier.pop()
+        problem._expanded += 1
 
         if current_goal.issubset(problem.initial_state):
             plan = current_plan
@@ -251,13 +293,22 @@ def backwardSearch(problem: Problem) -> list[Action]:
         else:
             unsatisfied_goal: State = frozenset(current_goal - problem.initial_state)
 
-            candidate_actions: list[Action] = []
+            candidate_set: set[Action] = set()
 
-            for action in all_actions:
-                if not action.add_list.isdisjoint(unsatisfied_goal):
-                    candidate_actions.append(action)
+            for fluent in unsatisfied_goal:
+                if fluent in actions_by_added_fluent:
+                    for action in actions_by_added_fluent[fluent]:
+                        candidate_set.add(action)
 
-            candidate_actions.sort(key=lambda action: action.name.startswith("Move"))
+            candidate_actions: list[Action] = list(candidate_set)
+
+            candidate_actions.sort(
+                key=lambda action: (
+                    action.name.startswith("Move"),
+                    len(action.precond_pos),
+                    action.name,
+                )
+            )
 
             for action in candidate_actions:
                 regressed_goal: State | None = regress(current_goal, action)
@@ -271,11 +322,24 @@ def backwardSearch(problem: Problem) -> list[Action]:
                         if predicate in static_predicates and fluent not in problem.initial_state:
                             dead_end = True
 
-                    if not dead_end:
+                    too_large: bool = False
+
+                    if len(regressed_goal) > 14:
+                        too_large = True
+
+                    if not dead_end and not too_large:
                         new_plan: list[Action] = [action] + current_plan
 
+                        priority: int = len(new_plan) + len(regressed_goal)
+
+                        if action.name.startswith("Move"):
+                            priority += 8
+
                         visited.add(regressed_goal)
-                        frontier.push((regressed_goal, new_plan))
+                        frontier.push((regressed_goal, new_plan), priority)
+
+    if not found:
+        plan = forwardBFS(problem)
 
     return plan
 

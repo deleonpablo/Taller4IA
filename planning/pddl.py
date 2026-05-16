@@ -168,12 +168,16 @@ def is_applicable(state: State, action: Action) -> bool:
     An action is applicable if:
       - All fluents in action.precond_pos are present in state.
       - No fluent  in action.precond_neg is present in state.
-
-    Tip: frozenset supports the .issubset() method and the .isdisjoint() method.
     """
-    ### Your code here ###
-    return False
-    ### End of your code ###
+    applicable: bool = False
+
+    positive_ok: bool = action.precond_pos.issubset(state)
+    negative_ok: bool = action.precond_neg.isdisjoint(state)
+
+    if positive_ok and negative_ok:
+        applicable = True
+
+    return applicable
 
 
 def apply_action(state: State, action: Action) -> State:
@@ -181,13 +185,10 @@ def apply_action(state: State, action: Action) -> State:
     Return the new state obtained by executing action in state.
 
     RESULT(s, a) = (s − DEL(a)) ∪ ADD(a)
-
-    Tip: frozenset supports set arithmetic: `|` (union) and `-` (difference).
-    The order matters: first remove del_list, then add add_list.
     """
-    ### Your code here ###
-    return frozenset({})
-    ### End of your code ###
+    new_state: State = frozenset((state - action.del_list) | action.add_list)
+
+    return new_state
 
 
 def get_all_groundings(domain: list[ActionSchema], objects: Objects) -> list[Action]:
@@ -224,22 +225,13 @@ def get_applicable_actions(
 ) -> list[Action]:
     """
     Return a list of all grounded actions that are applicable in state.
-
-    For each ActionSchema in domain, enumerate every possible binding of its
-    parameters to constants from objects, ground the schema, and check if
-    the grounded action is applicable.
-
-    Parameter types are inferred from the parameter names:
-        - Parameters named "r"                        → objects["robots"]
-        - Parameters named "loc", "from_cell", "to_cell" → objects["cells"]
-        - Parameters named "obj"                      → objects["objects"]
-        - Parameters named "s"                        → objects["supplies"]
-        - Parameters named "p"                        → objects["patients"]
-
-    Tip: Use itertools.product to enumerate all combinations of constants.
-         Then call action_schema.ground(binding) and is_applicable(state, grounded).
-         Or use get_all_groundings() and filter the results by applicability.
     """
-    ### Your code here ###
-    return []
-    ### End of your code ###
+    all_actions: list[Action] = get_all_groundings(domain, objects)
+    applicable_actions: list[Action] = []
+
+    for action in all_actions:
+        if is_applicable(state, action):
+            applicable_actions.append(action)
+
+    return applicable_actions
+

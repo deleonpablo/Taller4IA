@@ -127,19 +127,41 @@ def tinyBaseSearch(problem: Problem) -> list[Action]:
 def forwardBFS(problem: Problem) -> list[Action]:
     """
     Forward BFS in state space.
-
-    Explore states reachable from the initial state by applying actions,
-    in breadth-first order, until a goal state is found.
-
-    Returns a list of Action objects forming a valid plan, or [] if no plan exists.
-
-    Tip: The state is a frozenset of fluents. Use problem.getSuccessors(state)
-         to get (next_state, action, cost) triples. Track visited states to
-         avoid revisiting the same state twice (graph search, not tree search).
     """
-    ### Your code here ###
+    start_state: State = problem.getStartState()
 
-    ### End of your code ###
+    if problem.isGoalState(start_state):
+        return []
+
+    frontier: Queue = Queue()
+    frontier.push((start_state, []))
+
+    visited: set[State] = set()
+    visited.add(start_state)
+
+    plan: list[Action] = []
+    found: bool = False
+
+    while not frontier.isEmpty() and not found:
+        current_state, current_plan = frontier.pop()
+
+        successors: list[tuple[State, Action, int]] = problem.getSuccessors(current_state)
+
+        for successor in successors:
+            next_state: State = successor[0]
+            action: Action = successor[1]
+
+            if next_state not in visited:
+                new_plan: list[Action] = current_plan + [action]
+
+                if problem.isGoalState(next_state):
+                    plan = new_plan
+                    found = True
+                else:
+                    visited.add(next_state)
+                    frontier.push((next_state, new_plan))
+
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -150,45 +172,112 @@ def forwardBFS(problem: Problem) -> list[Action]:
 def regress(goal_set: State, action: Action) -> State | None:
     """
     Compute the regression of goal_set through action.
-
-    Given a goal description (set of fluents that must be true) and an action,
-    return the new goal description that, if satisfied, guarantees the original
-    goal is satisfied after executing action.
-
-    REGRESS(g, a) = (g − ADD(a)) ∪ PRECOND_pos(a)
-        IF:  ADD(a) ∩ g ≠ ∅   (action is relevant: contributes to the goal)
-        AND: DEL(a) ∩ g = ∅   (action does not undo any goal fluent)
-    Returns None if the action is not relevant or creates a contradiction.
-
-    Tip: Use frozenset operations: intersection (&), difference (-), union (|).
-         Check relevance first, then check for contradictions, then compute.
     """
-    ### Your code here ###
+    regressed_goal: State | None = None
 
-    ### End of your code ###
+    is_relevant: bool = not action.add_list.isdisjoint(goal_set)
+    deletes_goal: bool = not action.del_list.isdisjoint(goal_set)
+
+    if is_relevant and not deletes_goal:
+        new_goal: State = frozenset((goal_set - action.add_list) | action.precond_pos)
+
+        has_contradiction: bool = False
+
+        if not action.precond_neg.isdisjoint(new_goal):
+            has_contradiction = True
+
+        at_by_entity: dict[object, object] = {}
+        holding_objects: set[object] = set()
+        has_hands_free: bool = False
+
+        for fluent in new_goal:
+            if fluent[0] == "At":
+                entity = fluent[1]
+                location = fluent[2]
+
+                if entity in at_by_entity and at_by_entity[entity] != location:
+                    has_contradiction = True
+                else:
+                    at_by_entity[entity] = location
+
+            elif fluent[0] == "Holding":
+                holding_objects.add(fluent[2])
+
+            elif fluent[0] == "HandsFree":
+                has_hands_free = True
+
+        if has_hands_free and len(holding_objects) > 0:
+            has_contradiction = True
+
+        for held_object in holding_objects:
+            if held_object in at_by_entity:
+                has_contradiction = True
+
+        if not has_contradiction:
+            regressed_goal = new_goal
+
+    return regressed_goal
 
 
 def backwardSearch(problem: Problem) -> list[Action]:
     """
-    Backward search (regression search) from the goal.
-
-    Start from the goal description and apply action regressions until
-    the resulting goal is satisfied by the initial state.
-
-    Returns a list of Action objects forming a valid plan (in forward order),
-    or [] if no plan exists.
-
-    Tip: The "state" in backward search is a frozenset of fluents that must
-         be true (a partial goal description). The initial state is reached
-         when all fluents in the current goal are satisfied by problem.initial_state.
-         Only consider actions whose add_list has at least one unsatisfied goal fluent
-         (relevant actions). Use regress() to compute the new subgoal.
-         Skip subgoals that contain static predicates (MedicalPost, Adjacent,
-         Pickable) that are false in the initial state — these are dead ends.
+    Backward search using regression.
     """
-    ### Your code here ###
+    start_goal: State = problem.goal
 
-    ### End of your code ###
+    all_actions: list[Action] = get_all_groundings(problem.domain, problem.objects)
+
+    frontier: Queue = Queue()
+    frontier.push((start_goal, []))
+
+    visited: set[State] = set()
+    visited.add(start_goal)
+
+    static_predicates: set[str] = {
+        "MedicalPost",
+        "Adjacent",
+        "Pickable",
+    }
+
+    plan: list[Action] = []
+    found: bool = False
+
+    while not frontier.isEmpty() and not found:
+        current_goal, current_plan = frontier.pop()
+
+        if current_goal.issubset(problem.initial_state):
+            plan = current_plan
+            found = True
+        else:
+            unsatisfied_goal: State = frozenset(current_goal - problem.initial_state)
+
+            candidate_actions: list[Action] = []
+
+            for action in all_actions:
+                if not action.add_list.isdisjoint(unsatisfied_goal):
+                    candidate_actions.append(action)
+
+            candidate_actions.sort(key=lambda action: action.name.startswith("Move"))
+
+            for action in candidate_actions:
+                regressed_goal: State | None = regress(current_goal, action)
+
+                if regressed_goal is not None and regressed_goal not in visited:
+                    dead_end: bool = False
+
+                    for fluent in regressed_goal:
+                        predicate: str = fluent[0]
+
+                        if predicate in static_predicates and fluent not in problem.initial_state:
+                            dead_end = True
+
+                    if not dead_end:
+                        new_plan: list[Action] = [action] + current_plan
+
+                        visited.add(regressed_goal)
+                        frontier.push((regressed_goal, new_plan))
+
+    return plan
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from planning.pddl import ActionSchema, State, Objects
+from planning.pddl import get_all_groundings, get_applicable_actions
 
 
 def nullHeuristic(
@@ -45,6 +46,35 @@ def ignorePreconditionsHeuristic(
          Remember: with no preconditions, every grounding is "applicable".
     """
     ### Your code here ###
+    
+    unsatisfied = goal - state
+    
+    if not unsatisfied:
+        return 0
+    
+    all_actions = get_all_groundings(domain, objects)
+    
+    counter = 0
+    
+    while unsatisfied:
+        
+        best_action = None
+        best_covered = frozenset()
+        
+        for action in all_actions:
+            covered = action.add_list & unsatisfied
+            
+            if len(covered) > len(best_covered):
+                best_covered = covered
+                best_action = action
+                
+        if not best_action:
+            return float("inf")
+    
+        unsatisfied -= best_covered
+        counter += 1
+        
+    return counter
 
     ### End of your code ###
 
@@ -79,5 +109,43 @@ def ignoreDeleteListsHeuristic(
          each step (preconditions still apply in the relaxed model).
     """
     ### Your code here ###
+    
+    relaxed_state = state
+    counter = 0
+    
+    max_steps = len(goal) + len(domain) * 100
+    
+    while not goal.issubset(relaxed_state):
+        
+        
+        applicable_actions = get_applicable_actions(relaxed_state, domain, objects)
+        
+        if not applicable_actions:
+            return float("inf")
+        
+        unsatisfied = goal - relaxed_state
+        
+        best_action = None
+        best_count = -1
+        
+        for action in applicable_actions:
+            
+            newly_covered = len(action.add_list & unsatisfied)
+            
+            if newly_covered > best_count:
+                best_count = newly_covered
+                best_action = action
+            
+        if best_count == 0:
+            return float("inf")
+        
+        relaxed_state = relaxed_state | best_action.add_list
+        
+        counter += 1
+        
+        if counter > max_steps:
+            return float("inf")
+    
+    return counter
 
     ### End of your code ###

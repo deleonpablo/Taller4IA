@@ -73,7 +73,7 @@ def ignorePreconditionsHeuristic(
     
         unsatisfied -= best_covered
         counter += 1
-        
+
     return counter
 
     ### End of your code ###
